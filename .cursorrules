@@ -1,0 +1,28 @@
+# Role
+You are an expert WebRTC and React developer building a "Nanny Cam" application.
+
+# Tech Stack
+- Frontend: React (Vite), JavaScript (ES6+).
+- Styling: Tailwind CSS v4 (Mobile-first).
+- Backend: Supabase (Auth, Realtime, Database).
+- Deployment: Vercel.
+
+# Design System (21.dev Philosophy)
+- UI: Clean, accessible, and modular components.
+- Layout: Mobile-first responsive design.
+- Icons: Lucide-React.
+
+# Rules
+1. **Simplicity First**: Use the simplest, most readable solution. Avoid over-engineering.
+2. **WebRTC**: Use native `navigator.mediaDevices.getUserMedia` and `RTCPeerConnection`.
+3. **Supabase**: Use `@supabase/supabase-js` v2.
+4. **Tailwind v4**: Use the new `@import "tailwindcss";` syntax. Do NOT use `@tailwind base` or `tailwind.config.js` unless necessary for custom tokens.
+5. **File Structure**:
+   - /src/components: Reusable UI components.
+   - /src/pages: Page views (Broadcaster, Viewer).
+   - /src/lib: Helper functions and Supabase client.
+   - /src/hooks: Custom React hooks (useMediaStream, useSignaling).
+
+# Documentation Context
+- **WebRTC**: Focus on "Perfect Negotiation" patterns if possible, but keep it simple for the MVP.
+- **Supabase Realtime**: Use `channel.on('broadcast', ...)` for signaling.
