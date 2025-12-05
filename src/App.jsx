@@ -1,34 +1,31 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useEffect, useState } from 'react'
+import { supabase } from './lib/supabase'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [connectionStatus, setConnectionStatus] = useState('Checking connection...')
+
+  useEffect(() => {
+    async function checkSupabase() {
+      // Try to fetch data from the 'rooms' table (even if empty, it tests the connection)
+      const { data, error } = await supabase.from('rooms').select('*')
+
+      if (error) {
+        console.error('Supabase error:', error)
+        setConnectionStatus('Connection Failed (Check console)')
+      } else {
+        setConnectionStatus('Connected to Supabase successfully!')
+      }
+    }
+    checkSupabase()
+  }, [])
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="flex h-screen items-center justify-center bg-gray-100">
+      <div className="p-8 bg-white rounded-lg shadow-md text-center">
+        <h1 className="text-2xl font-bold mb-4 text-blue-600">Nanny Cam Setup</h1>
+        <p className="text-gray-700">{connectionStatus}</p>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    </div>
   )
 }
 
