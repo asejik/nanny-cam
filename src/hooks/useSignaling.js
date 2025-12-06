@@ -1,60 +1,92 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
 export function useSignaling(roomId, userId) {
   const channelRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [messages, setMessages] = useState([]); // For debugging log
+  const [messages, setMessages] = useState([]);
+
+  // Keep track of mounting to prevent updates after user leaves page
+  const isMounted = useRef(true);
 
   useEffect(() => {
+    isMounted.current = true;
     if (!roomId) return;
 
-    // 1. Create the channel (Unique to this room)
-    const channel = supabase.channel(`room:${roomId}`, {
-      config: {
-        broadcast: { self: false }, // Don't receive our own messages
-        presence: { key: userId },   // Track who is online
-      },
-    });
+    const topic = `room:${roomId}`;
+    let retryTimer = null;
 
-    // 2. Setup Event Listeners
-    channel
-      .on('broadcast', { event: 'signal' }, (payload) => {
-        console.log('📡 Received Signal:', payload.payload.type);
-        setMessages((prev) => [...prev, `Rx: ${payload.payload.type}`]);
-        // Future: We will pass this payload to WebRTC here
-      })
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        console.log('👥 Users in room:', state);
-        setMessages((prev) => [...prev, `Presence Update: ${Object.keys(state).length} users`]);
-      })
-      .subscribe((status) => {
-        console.log('Subscription status:', status);
-        setConnectionStatus(status);
+    const connect = async () => {
+      // 1. Cleanup specific existing channel if it exists locally
+      if (channelRef.current) {
+        await supabase.removeChannel(channelRef.current);
+      }
+
+      console.log(`[Signaling] Connecting to ${topic}...`);
+      setConnectionStatus('CONNECTING');
+
+      // 2. Create Channel
+      const channel = supabase.channel(topic, {
+        config: { broadcast: { self: false } },
       });
 
-    channelRef.current = channel;
+      // 3. Subscribe with Retry Logic
+      channel.subscribe((status, err) => {
+        if (!isMounted.current) return;
 
-    // Cleanup
-    return () => {
-      supabase.removeChannel(channel);
+        console.log(`[Supabase] Status: ${status}`);
+        setConnectionStatus(status);
+
+        if (status === 'SUBSCRIBED') {
+          // Success! Clear any pending retries
+          if (retryTimer) clearTimeout(retryTimer);
+        } else if (status === 'CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+          // Failure! Retry in 3 seconds
+          if (err) console.error('Channel Error:', err);
+
+          console.log('[Signaling] Connection failed. Retrying in 3s...');
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = setTimeout(() => {
+            if (isMounted.current) connect();
+          }, 3000);
+        }
+      });
+
+      channelRef.current = channel;
     };
-  }, [roomId, userId]);
 
-  // Function to send messages to the other peer
-  const sendSignal = async (type, data) => {
-    if (!channelRef.current) return;
+    // Start the connection loop
+    connect();
 
-    console.log('📤 Sending Signal:', type);
-    setMessages((prev) => [...prev, `Tx: ${type}`]);
+    // Cleanup on Unmount
+    return () => {
+      isMounted.current = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (channelRef.current) {
+        console.log('[Signaling] Unmounting - cleaning up.');
+        supabase.removeChannel(channelRef.current);
+      }
+    };
+  }, [roomId]);
 
-    await channelRef.current.send({
-      type: 'broadcast',
-      event: 'signal',
-      payload: { type, data, sender: userId },
-    });
-  };
+  const sendSignal = useCallback(async (type, data) => {
+    // Only send if we are actively subscribed
+    if (!channelRef.current || connectionStatus !== 'SUBSCRIBED') {
+        console.warn('Cannot send signal: Not connected.');
+        return;
+    }
+
+    try {
+      await channelRef.current.send({
+        type: 'broadcast',
+        event: 'signal',
+        payload: { type, data, sender: userId },
+      });
+      // console.log(`Signal sent: ${type}`);
+    } catch (err) {
+      console.error('Signal send failed:', err);
+    }
+  }, [userId, connectionStatus]);
 
   return { connectionStatus, sendSignal, messages };
 }
