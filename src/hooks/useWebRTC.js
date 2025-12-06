@@ -8,7 +8,6 @@ const SERVERS = {
   ],
 };
 
-// UPDATE: Accept 'connectionStatus' as a new argument
 export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionStatus) {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
@@ -127,13 +126,15 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, []);
 
-  // 7. FIX: Join as Viewer (Wait for GREEN status)
-  useEffect(() => {
+  // 7. Manual Connect Helper (NEW)
+  const connectToStream = useCallback(() => {
     if (!isBroadcaster && connectionStatus === 'SUBSCRIBED') {
-        console.log("Connection Green! Sending READY signal...");
+        console.log("Manual Connect: Sending READY signal...");
         sendSignal('ready', {});
     }
   }, [isBroadcaster, connectionStatus, sendSignal]);
 
-  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic };
+  // We removed the automatic useEffect. Now we wait for the user to click.
+
+  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream };
 }

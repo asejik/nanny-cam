@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSignaling } from '../hooks/useSignaling';
 import { useWebRTC } from '../hooks/useWebRTC';
-import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle, Mic } from 'lucide-react';
+import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle, Mic, Play } from 'lucide-react';
 
 export default function Room({ session }) {
   const { roomId } = useParams();
@@ -15,23 +15,23 @@ export default function Room({ session }) {
   const [role, setRole] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
-  const [isTalking, setIsTalking] = useState(false); // Track PTT state
+  const [isTalking, setIsTalking] = useState(false);
 
   // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
- // 2. WebRTC Hook
-  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic } = useWebRTC(
+  // 2. WebRTC Hook
+  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream } = useWebRTC(
     roomId,
     userId,
     role === 'broadcaster',
     sendSignal,
-    connectionStatus // <--- NEW: Pass the status here
+    connectionStatus
   );
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const remoteAudioRef = useRef(null); // NEW: For Broadcaster to hear Viewer
+  const remoteAudioRef = useRef(null);
 
   // Attach streams
   useEffect(() => {
@@ -40,9 +40,7 @@ export default function Room({ session }) {
 
   useEffect(() => {
     if (remoteStream) {
-        // If Viewer: Attach to Video
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-        // If Broadcaster: Attach to Audio (Hidden)
         if (remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
@@ -72,7 +70,6 @@ export default function Room({ session }) {
     setIsStreaming(false);
   };
 
-  // Push-to-Talk Handlers
   const startTalking = () => {
     setIsTalking(true);
     toggleMic(true);
@@ -118,8 +115,6 @@ export default function Room({ session }) {
     return (
       <div className="min-h-screen bg-black text-white relative">
         <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover absolute inset-0" />
-
-        {/* Hidden Audio Player for Two-Way Talkback */}
         <audio ref={remoteAudioRef} autoPlay />
 
         {/* Status Bar */}
@@ -164,14 +159,33 @@ export default function Room({ session }) {
   // Viewer View
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative">
-      <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl ring-1 ring-gray-800">
+      <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl ring-1 ring-gray-800 flex items-center justify-center">
+
+        {/* VIDEO PLAYER */}
+        <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-contain" />
+
+        {/* LOADING STATE */}
         {!remoteStream && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500 gap-2">
-             <Loader2 className="animate-spin" />
-             <p>Waiting for live stream...</p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-black/80 z-10">
+             {connectionStatus === 'SUBSCRIBED' ? (
+                // MANUAL CONNECT BUTTON (Fixes Mobile Autoplay)
+                <button
+                  onClick={connectToStream}
+                  className="flex flex-col items-center gap-4 group cursor-pointer"
+                >
+                  <div className="bg-blue-600 p-4 rounded-full shadow-lg group-hover:scale-110 transition">
+                    <Play size={32} fill="white" />
+                  </div>
+                  <p className="font-semibold text-lg">Tap to Watch</p>
+                </button>
+             ) : (
+                <div className="flex flex-col items-center gap-2 text-gray-400">
+                   <Loader2 className="animate-spin" />
+                   <p>Connecting to room...</p>
+                </div>
+             )}
           </div>
         )}
-        <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-contain" />
       </div>
 
       {/* Talkback Controls */}
