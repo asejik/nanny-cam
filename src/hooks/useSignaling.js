@@ -1,26 +1,30 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 
-export function useSignaling(roomId, userId) {
+// NEW: Accept onSignal callback to handle incoming messages
+export function useSignaling(roomId, userId, onSignal) {
   const channelRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [messages, setMessages] = useState([]);
 
-  // Keep track of mounting to prevent updates after user leaves page
-  const isMounted = useRef(true);
+  // Use a ref for the callback to prevent effect re-triggering
+  const onSignalRef = useRef(onSignal);
+
+  // Update ref whenever the callback changes
+  useEffect(() => {
+    onSignalRef.current = onSignal;
+  }, [onSignal]);
 
   useEffect(() => {
-    isMounted.current = true;
     if (!roomId) return;
 
     const topic = `room:${roomId}`;
-    let retryTimer = null;
+    let isMounted = true;
 
     const connect = async () => {
-      // 1. Cleanup specific existing channel if it exists locally
-      if (channelRef.current) {
-        await supabase.removeChannel(channelRef.current);
-      }
+      // 1. NUCLEAR CLEANUP (Safe now because we own the only connection)
+      await supabase.removeAllChannels();
+
+      if (!isMounted) return;
 
       console.log(`[Signaling] Connecting to ${topic}...`);
       setConnectionStatus('CONNECTING');
@@ -30,47 +34,34 @@ export function useSignaling(roomId, userId) {
         config: { broadcast: { self: false } },
       });
 
-      // 3. Subscribe with Retry Logic
-      channel.subscribe((status, err) => {
-        if (!isMounted.current) return;
+      // 3. Setup Listener (ON THE SAME CHANNEL)
+      channel.on('broadcast', { event: 'signal' }, (payload) => {
+          if (onSignalRef.current) {
+              onSignalRef.current(payload.payload);
+          }
+      });
 
+      // 4. Subscribe
+      channel.subscribe((status, err) => {
+        if (!isMounted) return;
         console.log(`[Supabase] Status: ${status}`);
         setConnectionStatus(status);
-
-        if (status === 'SUBSCRIBED') {
-          // Success! Clear any pending retries
-          if (retryTimer) clearTimeout(retryTimer);
-        } else if (status === 'CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
-          // Failure! Retry in 3 seconds
-          if (err) console.error('Channel Error:', err);
-
-          console.log('[Signaling] Connection failed. Retrying in 3s...');
-          if (retryTimer) clearTimeout(retryTimer);
-          retryTimer = setTimeout(() => {
-            if (isMounted.current) connect();
-          }, 3000);
-        }
       });
 
       channelRef.current = channel;
     };
 
-    // Start the connection loop
     connect();
 
-    // Cleanup on Unmount
     return () => {
-      isMounted.current = false;
-      if (retryTimer) clearTimeout(retryTimer);
+      isMounted = false;
       if (channelRef.current) {
-        console.log('[Signaling] Unmounting - cleaning up.');
         supabase.removeChannel(channelRef.current);
       }
     };
   }, [roomId]);
 
   const sendSignal = useCallback(async (type, data) => {
-    // Only send if we are actively subscribed
     if (!channelRef.current || connectionStatus !== 'SUBSCRIBED') {
         console.warn('Cannot send signal: Not connected.');
         return;
@@ -82,11 +73,10 @@ export function useSignaling(roomId, userId) {
         event: 'signal',
         payload: { type, data, sender: userId },
       });
-      // console.log(`Signal sent: ${type}`);
     } catch (err) {
       console.error('Signal send failed:', err);
     }
   }, [userId, connectionStatus]);
 
-  return { connectionStatus, sendSignal, messages };
+  return { connectionStatus, sendSignal };
 }
