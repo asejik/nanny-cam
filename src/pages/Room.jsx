@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useSignaling } from '../hooks/useSignaling';
 import { useWebRTC } from '../hooks/useWebRTC';
-import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle } from 'lucide-react';
+import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle, Mic } from 'lucide-react';
 
 export default function Room({ session }) {
   const { roomId } = useParams();
@@ -13,14 +13,15 @@ export default function Room({ session }) {
   );
 
   const [role, setRole] = useState(null);
-  const [isStreaming, setIsStreaming] = useState(false); // Track if we are live
-  const [isStarting, setIsStarting] = useState(false);   // Track button loading state
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isTalking, setIsTalking] = useState(false); // Track PTT state
 
   // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
   // 2. WebRTC Hook
-  const { localStream, remoteStream, startStream, stopStream, processSignal } = useWebRTC(
+  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic } = useWebRTC(
     roomId,
     userId,
     role === 'broadcaster',
@@ -29,6 +30,7 @@ export default function Room({ session }) {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null); // NEW: For Broadcaster to hear Viewer
 
   // Attach streams
   useEffect(() => {
@@ -36,7 +38,12 @@ export default function Room({ session }) {
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteStream && remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteStream) {
+        // If Viewer: Attach to Video
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+        // If Broadcaster: Attach to Audio (Hidden)
+        if (remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteStream;
+    }
   }, [remoteStream]);
 
   // Listen for signals
@@ -51,10 +58,8 @@ export default function Room({ session }) {
 
   // Handlers
   const handleStart = async () => {
-    setIsStarting(true); // Show spinner immediately
+    setIsStarting(true);
     await startStream();
-
-    // Fake a small delay so the user sees "Starting..."
     setTimeout(() => {
       setIsStreaming(true);
       setIsStarting(false);
@@ -64,6 +69,17 @@ export default function Room({ session }) {
   const handleStop = () => {
     stopStream();
     setIsStreaming(false);
+  };
+
+  // Push-to-Talk Handlers
+  const startTalking = () => {
+    setIsTalking(true);
+    toggleMic(true);
+  };
+
+  const stopTalking = () => {
+    setIsTalking(false);
+    toggleMic(false);
   };
 
   // --- RENDER ---
@@ -102,6 +118,9 @@ export default function Room({ session }) {
       <div className="min-h-screen bg-black text-white relative">
         <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover absolute inset-0" />
 
+        {/* Hidden Audio Player for Two-Way Talkback */}
+        <audio ref={remoteAudioRef} autoPlay />
+
         {/* Status Bar */}
         <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
@@ -116,9 +135,7 @@ export default function Room({ session }) {
 
         {/* Controls */}
         <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center w-full px-4 gap-2">
-
           {!isStreaming ? (
-            // START BUTTON
             <button
               onClick={handleStart}
               disabled={!isReady || isStarting}
@@ -128,20 +145,9 @@ export default function Room({ session }) {
                   : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                 }`}
             >
-               {isStarting ? (
-                 <>
-                   <Loader2 className="animate-spin" /> Starting...
-                 </>
-               ) : !isReady ? (
-                 "Connecting..."
-               ) : (
-                 <>
-                   <PlayCircle size={24} /> Start Stream
-                 </>
-               )}
+               {isStarting ? <><Loader2 className="animate-spin" /> Starting...</> : !isReady ? "Connecting..." : <><PlayCircle size={24} /> Start Stream</>}
             </button>
           ) : (
-            // STOP BUTTON
             <button
               onClick={handleStop}
               className="w-full max-w-sm rounded-full py-4 font-bold shadow-lg transition text-lg flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white cursor-pointer"
@@ -149,7 +155,6 @@ export default function Room({ session }) {
                <StopCircle size={24} /> Stop Stream
             </button>
           )}
-
         </div>
       </div>
     );
@@ -157,7 +162,7 @@ export default function Room({ session }) {
 
   // Viewer View
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative">
       <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl ring-1 ring-gray-800">
         {!remoteStream && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-500 gap-2">
@@ -165,9 +170,30 @@ export default function Room({ session }) {
              <p>Waiting for live stream...</p>
           </div>
         )}
-        <video ref={remoteVideoRef} autoPlay playsInline controls className="h-full w-full object-contain" />
+        <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-contain" />
       </div>
-      <div className="mt-4 flex items-center gap-2 text-gray-400 text-sm">
+
+      {/* Talkback Controls */}
+      {remoteStream && (
+        <button
+          onMouseDown={startTalking}
+          onMouseUp={stopTalking}
+          onTouchStart={startTalking}
+          onTouchEnd={stopTalking}
+          className={`mt-8 flex h-20 w-20 items-center justify-center rounded-full border-4 shadow-xl transition-all active:scale-95 select-none
+            ${isTalking
+              ? 'bg-blue-600 border-blue-400 text-white scale-110 ring-4 ring-blue-500/30'
+              : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'}`}
+        >
+          <Mic size={32} className={isTalking ? 'animate-pulse' : ''} />
+        </button>
+      )}
+
+      {remoteStream && (
+        <p className="mt-4 text-xs text-gray-500 font-medium">Hold to Speak</p>
+      )}
+
+      <div className="mt-4 flex items-center gap-2 text-gray-400 text-sm absolute bottom-4 right-4">
         <Wifi size={14} /> Status: <span className="font-mono text-white">{connectionStatus}</span>
       </div>
     </div>

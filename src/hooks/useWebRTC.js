@@ -16,25 +16,37 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
   // Track if the user explicitly clicked "Start"
   const isLiveRef = useRef(false);
 
-  // 1. Setup Media (Broadcaster Only)
+  // 1. Setup Media (For BOTH Broadcaster and Viewer)
   useEffect(() => {
-    if (!isBroadcaster) return;
-
     let stream = null;
-    const startCamera = async () => {
+
+    const setupMedia = async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
+        if (isBroadcaster) {
+            // Broadcaster: Camera + Mic
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true,
+            });
+        } else {
+            // Viewer: Mic ONLY (for Talkback)
+            // We ask for it immediately so it's ready to go
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: false,
+              audio: true,
+            });
+            // CRITICAL: Mute it by default!
+            stream.getAudioTracks().forEach(track => track.enabled = false);
+        }
         setLocalStream(stream);
       } catch (err) {
-        console.error('Error accessing camera:', err);
-        alert('Could not access camera.');
+        console.error('Error accessing media:', err);
+        // Viewer might deny mic, that's okay, app should still work
+        if (isBroadcaster) alert('Could not access camera/mic.');
       }
     };
 
-    startCamera();
+    setupMedia();
 
     return () => {
       if (stream) {
@@ -43,7 +55,16 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     };
   }, [isBroadcaster]);
 
-  // 2. Create Peer Helper
+  // 2. Helper to Toggle Mic (Push-to-Talk)
+  const toggleMic = useCallback((isEnabled) => {
+    if (localStream) {
+        localStream.getAudioTracks().forEach(track => {
+            track.enabled = isEnabled;
+        });
+    }
+  }, [localStream]);
+
+  // 3. Create Peer Helper
   const createPeer = useCallback(() => {
     console.log("Creating new RTCPeerConnection");
     const pc = new RTCPeerConnection(SERVERS);
@@ -55,10 +76,11 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     };
 
     pc.ontrack = (event) => {
-      console.log('Video stream received!', event.streams[0]);
+      console.log('Stream received!', event.streams[0]);
       setRemoteStream(event.streams[0]);
     };
 
+    // Add Local Stream (Camera for Broadcaster, Mic for Viewer)
     if (localStream) {
       localStream.getTracks().forEach((track) => {
         pc.addTrack(track, localStream);
@@ -68,7 +90,7 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     return pc;
   }, [localStream, sendSignal]);
 
-  // 3. Start Stream (Manual Trigger)
+  // 4. Start Stream (Manual Trigger)
   const startStream = useCallback(async () => {
     if (!isBroadcaster) return;
 
@@ -89,23 +111,19 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     }
   }, [isBroadcaster, sendSignal, createPeer]);
 
-  // 4. Process Signals
+  // 5. Process Signals
   const processSignal = useCallback(async (type, data, senderId) => {
     if (senderId === userId) return;
 
-    // HANDLE LATE JOINERS:
-    // Only respond to 'ready' if we are ACTUALLY LIVE (User clicked Start)
+    // Handle "ready" signal
     if (type === 'ready' && isBroadcaster) {
         if (isLiveRef.current) {
-            console.log("Viewer is ready and we are LIVE. Sending offer...");
-            // Restart connection to ensure clean state
+            console.log("Viewer ready. Renegotiating...");
             if (peerRef.current) {
                 peerRef.current.close();
                 peerRef.current = null;
             }
             startStream();
-        } else {
-            console.log("Viewer is ready, but we are NOT live. Ignoring.");
         }
         return;
     }
@@ -134,21 +152,18 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     }
   }, [isBroadcaster, sendSignal, userId, createPeer, startStream]);
 
-  // 5. Stop Stream
+  // 6. Stop Stream
   const stopStream = useCallback(() => {
-    isLiveRef.current = false; // MARK AS STOPPED
-
+    isLiveRef.current = false;
     if (peerRef.current) {
-      console.log("Stopping stream...");
       peerRef.current.close();
       peerRef.current = null;
     }
   }, []);
 
-  // 6. Join as Viewer (Keep sending 'ready' signal)
+  // 7. Join as Viewer
   useEffect(() => {
     if (!isBroadcaster) {
-        // Send ready signal immediately
         const timer = setTimeout(() => {
             sendSignal('ready', {});
         }, 1000);
@@ -156,5 +171,5 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal) {
     }
   }, [isBroadcaster, sendSignal]);
 
-  return { localStream, remoteStream, startStream, stopStream, processSignal };
+  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic };
 }
