@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-// FIX: Add Free TURN Server (OpenRelay) to bypass Mobile Firewalls
 const SERVERS = {
   iceServers: [
-    {
-      urls: [
-        'stun:stun1.l.google.com:19302',
-        'stun:stun2.l.google.com:19302'
-      ]
-    },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -30,9 +25,14 @@ const SERVERS = {
 export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionStatus) {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-
-  // NEW: Debug ICE Connection State
   const [iceStatus, setIceStatus] = useState('new');
+
+  // NEW: Debug Logs
+  const [logs, setLogs] = useState([]);
+  const addLog = (msg) => {
+    console.log(`[WebRTC] ${msg}`);
+    setLogs(prev => [...prev.slice(-4), msg]); // Keep last 5 logs
+  };
 
   const peerRef = useRef(null);
   const isLiveRef = useRef(false);
@@ -50,8 +50,9 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
             stream.getAudioTracks().forEach(track => track.enabled = false);
         }
         setLocalStream(stream);
+        addLog("Media acquired");
       } catch (err) {
-        console.error('Error accessing media:', err);
+        addLog(`Media Error: ${err.message}`);
       }
     };
     setupMedia();
@@ -60,22 +61,14 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     };
   }, [isBroadcaster]);
 
-  // 2. Toggle Mic
-  const toggleMic = useCallback((isEnabled) => {
-    if (localStream) {
-        localStream.getAudioTracks().forEach(track => track.enabled = isEnabled);
-    }
-  }, [localStream]);
-
-  // 3. Create Peer
+  // 2. Create Peer
   const createPeer = useCallback(() => {
-    console.log("Creating new RTCPeerConnection with TURN");
+    addLog("Creating Peer Connection...");
     const pc = new RTCPeerConnection(SERVERS);
 
-    // DEBUG: Track Connection State
     pc.oniceconnectionstatechange = () => {
-        console.log("ICE State:", pc.iceConnectionState);
         setIceStatus(pc.iceConnectionState);
+        addLog(`ICE State: ${pc.iceConnectionState}`);
     };
 
     pc.onicecandidate = (event) => {
@@ -83,7 +76,7 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     };
 
     pc.ontrack = (event) => {
-      console.log('Stream received!', event.streams[0]);
+      addLog("Stream track received!");
       setRemoteStream(event.streams[0]);
     };
 
@@ -94,7 +87,7 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     return pc;
   }, [localStream, sendSignal]);
 
-  // 4. Start Stream
+  // 3. Start Stream
   const startStream = useCallback(async () => {
     if (!isBroadcaster) return;
     isLiveRef.current = true;
@@ -107,27 +100,35 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     const pc = peerRef.current;
 
     try {
+        addLog("Creating Offer...");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         sendSignal('offer', offer);
+        addLog("Offer sent.");
     } catch (err) {
-        console.error("Error creating offer:", err);
+        addLog(`Offer Error: ${err.message}`);
     }
   }, [isBroadcaster, sendSignal, createPeer]);
 
-  // 5. Process Signals
+  // 4. Process Signals
   const processSignal = useCallback(async (type, data, senderId) => {
     if (senderId === userId) return;
 
+    // Handle "ready"
     if (type === 'ready' && isBroadcaster) {
+        addLog("Received READY from Viewer");
         if (isLiveRef.current) {
-            console.log("Viewer ready. Restarting Stream...");
+            addLog("Restarting Stream...");
             startStream();
+        } else {
+            addLog("Ignored READY (Not Live)");
         }
         return;
     }
 
+    // Handle Offer
     if (type === 'offer' && !isBroadcaster) {
+        addLog("Received OFFER");
         if (peerRef.current) {
              peerRef.current.close();
              peerRef.current = null;
@@ -142,10 +143,14 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     try {
       if (type === 'offer') {
         if (isBroadcaster) return;
+
         await pc.setRemoteDescription(new RTCSessionDescription(data));
+        addLog("Remote Desc Set");
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal('answer', answer);
+        addLog("Answer sent");
 
         while (candidateQueue.current.length > 0) {
             const candidate = candidateQueue.current.shift();
@@ -154,7 +159,9 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
 
       } else if (type === 'answer') {
         if (!isBroadcaster) return;
+        addLog("Received ANSWER");
         await pc.setRemoteDescription(new RTCSessionDescription(data));
+
         while (candidateQueue.current.length > 0) {
             const candidate = candidateQueue.current.shift();
             await pc.addIceCandidate(candidate);
@@ -169,23 +176,14 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
         }
       }
     } catch (err) {
-      console.error('Error processing signal:', err);
+      addLog(`Signal Error: ${err.message}`);
     }
   }, [isBroadcaster, sendSignal, userId, createPeer, startStream]);
 
-  // 6. Stop Stream
-  const stopStream = useCallback(() => {
-    isLiveRef.current = false;
-    if (peerRef.current) {
-      peerRef.current.close();
-      peerRef.current = null;
-    }
-    candidateQueue.current = [];
-  }, []);
-
-  // 7. Manual Connect Helper
+  // 5. Connect Helper
   const connectToStream = useCallback(() => {
     if (!isBroadcaster && connectionStatus === 'SUBSCRIBED') {
+        addLog("Manual Connect: Sending READY...");
         if (peerRef.current) {
             peerRef.current.close();
             peerRef.current = null;
@@ -195,6 +193,20 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, [isBroadcaster, connectionStatus, sendSignal]);
 
-  // Return iceStatus so we can show it in the UI
-  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream, iceStatus };
+  const toggleMic = useCallback((isEnabled) => {
+    if (localStream) {
+        localStream.getAudioTracks().forEach(track => track.enabled = isEnabled);
+    }
+  }, [localStream]);
+
+  const stopStream = useCallback(() => {
+    isLiveRef.current = false;
+    if (peerRef.current) {
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+    candidateQueue.current = [];
+  }, []);
+
+  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream, iceStatus, logs };
 }

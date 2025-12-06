@@ -17,14 +17,24 @@ export default function Room({ session }) {
   const [isStarting, setIsStarting] = useState(false);
   const [isTalking, setIsTalking] = useState(false);
 
-  // NEW: Track if the viewer has clicked "Watch"
+  // Track if the viewer has clicked "Watch"
   const [isRequested, setIsRequested] = useState(false);
 
   // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
   // 2. WebRTC Hook
-  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream, iceStatus } = useWebRTC(
+  const {
+    localStream,
+    remoteStream,
+    startStream,
+    stopStream,
+    processSignal,
+    toggleMic,
+    connectToStream,
+    iceStatus,
+    logs
+  } = useWebRTC(
     roomId,
     userId,
     role === 'broadcaster',
@@ -73,12 +83,9 @@ export default function Room({ session }) {
     setIsStreaming(false);
   };
 
-  // Viewer: Handle "Tap to Watch"
   const handleWatchClick = () => {
-    setIsRequested(true); // 1. Update UI immediately
-    connectToStream();    // 2. Send 'Ready' signal
-
-    // 3. Force Wake-up Video Element (Solves "Nothing Happens" on iOS)
+    setIsRequested(true);
+    connectToStream();
     if (remoteVideoRef.current) {
         remoteVideoRef.current.play().catch(e => console.log("Autoplay handled:", e));
     }
@@ -131,7 +138,6 @@ export default function Room({ session }) {
         <video ref={localVideoRef} autoPlay muted playsInline className="h-full w-full object-cover absolute inset-0" />
         <audio ref={remoteAudioRef} autoPlay />
 
-        {/* Status Bar */}
         <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
              {isStreaming && <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse"></span>}
@@ -143,7 +149,6 @@ export default function Room({ session }) {
           </div>
         </div>
 
-        {/* Controls */}
         <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center w-full px-4 gap-2">
           {!isStreaming ? (
             <button
@@ -175,15 +180,12 @@ export default function Room({ session }) {
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative">
       <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl ring-1 ring-gray-800 flex items-center justify-center">
 
-        {/* VIDEO PLAYER */}
         <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-contain" />
 
-        {/* LOADING STATE */}
         {!remoteStream && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-black/80 z-10">
              {connectionStatus === 'SUBSCRIBED' ? (
                 !isRequested ? (
-                  // 1. SHOW BUTTON INITIALLY
                   <button
                     onClick={handleWatchClick}
                     className="flex flex-col items-center gap-4 group cursor-pointer"
@@ -194,15 +196,19 @@ export default function Room({ session }) {
                     <p className="font-semibold text-lg">Tap to Watch</p>
                   </button>
                 ) : (
-                  // 2. SHOW SPINNER IMMEDIATELY AFTER CLICK
                   <div className="flex flex-col items-center gap-2 text-blue-400">
                     <Loader2 className="animate-spin h-10 w-10" />
                     <p className="font-medium animate-pulse">Requesting Video...</p>
                     <p className="text-xs text-gray-400 mt-2">Connecting to Broadcaster</p>
-                    {/* NEW DEBUG INFO */}
-                    <p className="text-[10px] font-mono text-gray-500 uppercase mt-4 border border-gray-800 px-2 py-1 rounded">
-                        ICE State: {iceStatus}
-                    </p>
+
+                    {/* DEBUG LOGS */}
+                    <div className="mt-6 w-64 rounded bg-gray-900/80 p-2 text-left font-mono text-[10px] text-green-400">
+                        <p className="border-b border-gray-700 pb-1 mb-1 text-gray-500">DEBUG LOG:</p>
+                        <p>ICE: {iceStatus}</p>
+                        {logs.map((log, i) => (
+                           <p key={i} className="truncate">&gt; {log}</p>
+                        ))}
+                    </div>
                   </div>
                 )
              ) : (
@@ -215,7 +221,6 @@ export default function Room({ session }) {
         )}
       </div>
 
-      {/* Talkback Controls */}
       {remoteStream && (
         <button
           onMouseDown={startTalking}
