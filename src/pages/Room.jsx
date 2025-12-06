@@ -24,7 +24,7 @@ export default function Room({ session }) {
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
   // 2. WebRTC Hook
-  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream } = useWebRTC(
+  const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream, iceStatus } = useWebRTC(
     roomId,
     userId,
     role === 'broadcaster',
@@ -199,6 +199,10 @@ export default function Room({ session }) {
                     <Loader2 className="animate-spin h-10 w-10" />
                     <p className="font-medium animate-pulse">Requesting Video...</p>
                     <p className="text-xs text-gray-400 mt-2">Connecting to Broadcaster</p>
+                    {/* NEW DEBUG INFO */}
+                    <p className="text-[10px] font-mono text-gray-500 uppercase mt-4 border border-gray-800 px-2 py-1 rounded">
+                        ICE State: {iceStatus}
+                    </p>
                   </div>
                 )
              ) : (

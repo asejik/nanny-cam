@@ -1,11 +1,29 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-// FIX 1: More Robust STUN Server List
+// FIX: Add Free TURN Server (OpenRelay) to bypass Mobile Firewalls
 const SERVERS = {
   iceServers: [
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' }
+    {
+      urls: [
+        'stun:stun1.l.google.com:19302',
+        'stun:stun2.l.google.com:19302'
+      ]
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
   ],
 };
 
@@ -13,10 +31,11 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
 
+  // NEW: Debug ICE Connection State
+  const [iceStatus, setIceStatus] = useState('new');
+
   const peerRef = useRef(null);
   const isLiveRef = useRef(false);
-
-  // FIX 2: Create a Queue for early ICE candidates
   const candidateQueue = useRef([]);
 
   // 1. Setup Media
@@ -27,7 +46,6 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
         if (isBroadcaster) {
             stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         } else {
-            // Viewer: Mic only (muted by default)
             stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
             stream.getAudioTracks().forEach(track => track.enabled = false);
         }
@@ -51,8 +69,14 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
 
   // 3. Create Peer
   const createPeer = useCallback(() => {
-    console.log("Creating new RTCPeerConnection");
+    console.log("Creating new RTCPeerConnection with TURN");
     const pc = new RTCPeerConnection(SERVERS);
+
+    // DEBUG: Track Connection State
+    pc.oniceconnectionstatechange = () => {
+        console.log("ICE State:", pc.iceConnectionState);
+        setIceStatus(pc.iceConnectionState);
+    };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) sendSignal('candidate', event.candidate);
@@ -91,11 +115,10 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, [isBroadcaster, sendSignal, createPeer]);
 
-  // 5. Process Signals (THE BIG FIX)
+  // 5. Process Signals
   const processSignal = useCallback(async (type, data, senderId) => {
     if (senderId === userId) return;
 
-    // Handle "ready" signal
     if (type === 'ready' && isBroadcaster) {
         if (isLiveRef.current) {
             console.log("Viewer ready. Restarting Stream...");
@@ -104,43 +127,34 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
         return;
     }
 
-    // Handle Offer
     if (type === 'offer' && !isBroadcaster) {
         if (peerRef.current) {
              peerRef.current.close();
              peerRef.current = null;
         }
         peerRef.current = createPeer();
-        // Clear queue on new connection
         candidateQueue.current = [];
     }
 
     const pc = peerRef.current;
-    if (!pc && type !== 'offer') return; // Ignore candidates if no peer exists yet
+    if (!pc && type !== 'offer') return;
 
     try {
       if (type === 'offer') {
         if (isBroadcaster) return;
-        console.log("Processing Offer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data));
-
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal('answer', answer);
 
-        // FLUSH QUEUE: Process any candidates that arrived early
         while (candidateQueue.current.length > 0) {
             const candidate = candidateQueue.current.shift();
-            console.log("Flushing buffered candidate");
             await pc.addIceCandidate(candidate);
         }
 
       } else if (type === 'answer') {
         if (!isBroadcaster) return;
-        console.log("Processing Answer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data));
-
-        // FLUSH QUEUE for Broadcaster too
         while (candidateQueue.current.length > 0) {
             const candidate = candidateQueue.current.shift();
             await pc.addIceCandidate(candidate);
@@ -148,13 +162,9 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
 
       } else if (type === 'candidate') {
         const candidate = new RTCIceCandidate(data);
-
-        // CHECK: Is remote description set?
         if (pc.remoteDescription && pc.remoteDescription.type) {
             await pc.addIceCandidate(candidate);
         } else {
-            // BUFFER: Save it for later
-            console.log("Buffering early candidate...");
             candidateQueue.current.push(candidate);
         }
       }
@@ -176,7 +186,6 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
   // 7. Manual Connect Helper
   const connectToStream = useCallback(() => {
     if (!isBroadcaster && connectionStatus === 'SUBSCRIBED') {
-        console.log("Manual Connect: Resetting PC and sending READY...");
         if (peerRef.current) {
             peerRef.current.close();
             peerRef.current = null;
@@ -186,5 +195,6 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, [isBroadcaster, connectionStatus, sendSignal]);
 
-  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream };
+  // Return iceStatus so we can show it in the UI
+  return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream, iceStatus };
 }
