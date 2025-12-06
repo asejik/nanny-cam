@@ -17,6 +17,9 @@ export default function Room({ session }) {
   const [isStarting, setIsStarting] = useState(false);
   const [isTalking, setIsTalking] = useState(false);
 
+  // NEW: Track if the viewer has clicked "Watch"
+  const [isRequested, setIsRequested] = useState(false);
+
   // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
@@ -68,6 +71,17 @@ export default function Room({ session }) {
   const handleStop = () => {
     stopStream();
     setIsStreaming(false);
+  };
+
+  // Viewer: Handle "Tap to Watch"
+  const handleWatchClick = () => {
+    setIsRequested(true); // 1. Update UI immediately
+    connectToStream();    // 2. Send 'Ready' signal
+
+    // 3. Force Wake-up Video Element (Solves "Nothing Happens" on iOS)
+    if (remoteVideoRef.current) {
+        remoteVideoRef.current.play().catch(e => console.log("Autoplay handled:", e));
+    }
   };
 
   const startTalking = () => {
@@ -168,16 +182,25 @@ export default function Room({ session }) {
         {!remoteStream && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-black/80 z-10">
              {connectionStatus === 'SUBSCRIBED' ? (
-                // MANUAL CONNECT BUTTON (Fixes Mobile Autoplay)
-                <button
-                  onClick={connectToStream}
-                  className="flex flex-col items-center gap-4 group cursor-pointer"
-                >
-                  <div className="bg-blue-600 p-4 rounded-full shadow-lg group-hover:scale-110 transition">
-                    <Play size={32} fill="white" />
+                !isRequested ? (
+                  // 1. SHOW BUTTON INITIALLY
+                  <button
+                    onClick={handleWatchClick}
+                    className="flex flex-col items-center gap-4 group cursor-pointer"
+                  >
+                    <div className="bg-blue-600 p-4 rounded-full shadow-lg group-hover:scale-110 transition">
+                      <Play size={32} fill="white" />
+                    </div>
+                    <p className="font-semibold text-lg">Tap to Watch</p>
+                  </button>
+                ) : (
+                  // 2. SHOW SPINNER IMMEDIATELY AFTER CLICK
+                  <div className="flex flex-col items-center gap-2 text-blue-400">
+                    <Loader2 className="animate-spin h-10 w-10" />
+                    <p className="font-medium animate-pulse">Requesting Video...</p>
+                    <p className="text-xs text-gray-400 mt-2">Connecting to Broadcaster</p>
                   </div>
-                  <p className="font-semibold text-lg">Tap to Watch</p>
-                </button>
+                )
              ) : (
                 <div className="flex flex-col items-center gap-2 text-gray-400">
                    <Loader2 className="animate-spin" />
