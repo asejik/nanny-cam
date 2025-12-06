@@ -46,6 +46,7 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
 
   // 3. Create Peer
   const createPeer = useCallback(() => {
+    console.log("Creating new RTCPeerConnection");
     const pc = new RTCPeerConnection(SERVERS);
     pc.onicecandidate = (event) => {
       if (event.candidate) sendSignal('candidate', event.candidate);
@@ -65,7 +66,12 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     if (!isBroadcaster) return;
     isLiveRef.current = true;
 
-    if (!peerRef.current) peerRef.current = createPeer();
+    // Reset PeerConnection for a clean start
+    if (peerRef.current) {
+        peerRef.current.close();
+        peerRef.current = null;
+    }
+    peerRef.current = createPeer();
     const pc = peerRef.current;
 
     try {
@@ -81,21 +87,25 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
   const processSignal = useCallback(async (type, data, senderId) => {
     if (senderId === userId) return;
 
+    // Handle "ready" signal (Viewer asking for stream)
     if (type === 'ready' && isBroadcaster) {
         if (isLiveRef.current) {
-            console.log("Viewer ready. Renegotiating...");
-            if (peerRef.current) {
-                peerRef.current.close();
-                peerRef.current = null;
-            }
-            startStream();
+            console.log("Viewer ready. Restarting Stream...");
+            startStream(); // This triggers the fresh offer
         }
         return;
     }
 
-    if (!peerRef.current && type === 'offer' && !isBroadcaster) {
+    // Handle Offer (Viewer receiving stream)
+    if (type === 'offer' && !isBroadcaster) {
+        // If we have an old stuck connection, kill it now
+        if (peerRef.current) {
+             peerRef.current.close();
+             peerRef.current = null;
+        }
         peerRef.current = createPeer();
     }
+
     const pc = peerRef.current;
     if (!pc) return;
 
@@ -126,15 +136,20 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, []);
 
-  // 7. Manual Connect Helper (NEW)
+  // 7. Manual Connect Helper (UPDATED)
   const connectToStream = useCallback(() => {
     if (!isBroadcaster && connectionStatus === 'SUBSCRIBED') {
-        console.log("Manual Connect: Sending READY signal...");
+        console.log("Manual Connect: Resetting PC and sending READY...");
+
+        // NUCLEAR RESET: Ensure we have NO existing connection blocking us
+        if (peerRef.current) {
+            peerRef.current.close();
+            peerRef.current = null;
+        }
+
         sendSignal('ready', {});
     }
   }, [isBroadcaster, connectionStatus, sendSignal]);
-
-  // We removed the automatic useEffect. Now we wait for the user to click.
 
   return { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic, connectToStream };
 }
