@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { supabase } from '../lib/supabase'; // We don't need this directly anymore, but keeping for safety
+import { supabase } from '../lib/supabase';
 import { useSignaling } from '../hooks/useSignaling';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle, Mic, Play } from 'lucide-react';
@@ -8,9 +8,14 @@ import { Video, Monitor, Wifi, Loader2, WifiOff, StopCircle, PlayCircle, Mic, Pl
 export default function Room({ session }) {
   const { roomId } = useParams();
 
-  const [userId] = useState(() =>
-    session?.user?.id || `viewer-${Math.random().toString(36).substr(2, 9)}`
-  );
+  // FIX: Generate a Unique "Device ID" every time.
+  // Even if you log in as the same user on two phones, they will now be distinct.
+  // Format: "user_123:abc1"
+  const [userId] = useState(() => {
+    const baseId = session?.user?.id || 'anon';
+    const deviceSuffix = Math.random().toString(36).substr(2, 5);
+    return `${baseId}:${deviceSuffix}`;
+  });
 
   const [role, setRole] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -18,22 +23,7 @@ export default function Room({ session }) {
   const [isTalking, setIsTalking] = useState(false);
   const [isRequested, setIsRequested] = useState(false);
 
-  // 0. Define Signal Handler Wrapper
-  // We need a stable function to pass to the signaling hook
-  const handleIncomingSignal = useCallback((payload) => {
-     // This will be connected to WebRTC later in the render cycle,
-     // but we need a bridge. Ideally, we move this logic.
-     // However, for this fix, we will use a Ref to access the latest processSignal
-  }, []);
-
-  // WAIT! The dependency cycle is tricky:
-  // useSignaling needs processSignal.
-  // useWebRTC needs sendSignal (from useSignaling).
-  // Circular Dependency!
-
-  // SOLUTION: We define useSignaling first with a dummy, then pass the real handler via a Ref or Effect?
-  // Easier: We just use a Ref for the processSignal function inside the component.
-
+  // Define Signal Handler
   const processSignalRef = useRef(null);
 
   const onSignal = useCallback((payload) => {
@@ -42,7 +32,7 @@ export default function Room({ session }) {
     }
   }, []);
 
-  // 1. Signaling Hook (Now handles listening too!)
+  // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId, onSignal);
 
   // 2. WebRTC Hook
@@ -64,13 +54,10 @@ export default function Room({ session }) {
     connectionStatus
   );
 
-  // 3. Link the Ref (Closing the loop)
+  // 3. Link the Ref
   useEffect(() => {
     processSignalRef.current = processSignal;
   }, [processSignal]);
-
-  // 4. DELETED: The old useEffect that created a duplicate 'supabase.channel'
-  // It is gone. The duplicate connection bug is fixed.
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
