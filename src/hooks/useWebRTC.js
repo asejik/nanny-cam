@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
+// FIX 1: More Robust STUN Server List
 const SERVERS = {
   iceServers: [
-    {
-      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
-    },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' }
   ],
 };
 
 export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionStatus) {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
+
   const peerRef = useRef(null);
   const isLiveRef = useRef(false);
+
+  // FIX 2: Create a Queue for early ICE candidates
+  const candidateQueue = useRef([]);
 
   // 1. Setup Media
   useEffect(() => {
@@ -48,16 +53,20 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
   const createPeer = useCallback(() => {
     console.log("Creating new RTCPeerConnection");
     const pc = new RTCPeerConnection(SERVERS);
+
     pc.onicecandidate = (event) => {
       if (event.candidate) sendSignal('candidate', event.candidate);
     };
+
     pc.ontrack = (event) => {
       console.log('Stream received!', event.streams[0]);
       setRemoteStream(event.streams[0]);
     };
+
     if (localStream) {
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
+
     return pc;
   }, [localStream, sendSignal]);
 
@@ -66,7 +75,6 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     if (!isBroadcaster) return;
     isLiveRef.current = true;
 
-    // Reset PeerConnection for a clean start
     if (peerRef.current) {
         peerRef.current.close();
         peerRef.current = null;
@@ -83,44 +91,72 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
     }
   }, [isBroadcaster, sendSignal, createPeer]);
 
-  // 5. Process Signals
+  // 5. Process Signals (THE BIG FIX)
   const processSignal = useCallback(async (type, data, senderId) => {
     if (senderId === userId) return;
 
-    // Handle "ready" signal (Viewer asking for stream)
+    // Handle "ready" signal
     if (type === 'ready' && isBroadcaster) {
         if (isLiveRef.current) {
             console.log("Viewer ready. Restarting Stream...");
-            startStream(); // This triggers the fresh offer
+            startStream();
         }
         return;
     }
 
-    // Handle Offer (Viewer receiving stream)
+    // Handle Offer
     if (type === 'offer' && !isBroadcaster) {
-        // If we have an old stuck connection, kill it now
         if (peerRef.current) {
              peerRef.current.close();
              peerRef.current = null;
         }
         peerRef.current = createPeer();
+        // Clear queue on new connection
+        candidateQueue.current = [];
     }
 
     const pc = peerRef.current;
-    if (!pc) return;
+    if (!pc && type !== 'offer') return; // Ignore candidates if no peer exists yet
 
     try {
       if (type === 'offer') {
         if (isBroadcaster) return;
+        console.log("Processing Offer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data));
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal('answer', answer);
+
+        // FLUSH QUEUE: Process any candidates that arrived early
+        while (candidateQueue.current.length > 0) {
+            const candidate = candidateQueue.current.shift();
+            console.log("Flushing buffered candidate");
+            await pc.addIceCandidate(candidate);
+        }
+
       } else if (type === 'answer') {
         if (!isBroadcaster) return;
+        console.log("Processing Answer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data));
+
+        // FLUSH QUEUE for Broadcaster too
+        while (candidateQueue.current.length > 0) {
+            const candidate = candidateQueue.current.shift();
+            await pc.addIceCandidate(candidate);
+        }
+
       } else if (type === 'candidate') {
-        await pc.addIceCandidate(new RTCIceCandidate(data));
+        const candidate = new RTCIceCandidate(data);
+
+        // CHECK: Is remote description set?
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(candidate);
+        } else {
+            // BUFFER: Save it for later
+            console.log("Buffering early candidate...");
+            candidateQueue.current.push(candidate);
+        }
       }
     } catch (err) {
       console.error('Error processing signal:', err);
@@ -134,19 +170,18 @@ export function useWebRTC(roomId, userId, isBroadcaster, sendSignal, connectionS
       peerRef.current.close();
       peerRef.current = null;
     }
+    candidateQueue.current = [];
   }, []);
 
-  // 7. Manual Connect Helper (UPDATED)
+  // 7. Manual Connect Helper
   const connectToStream = useCallback(() => {
     if (!isBroadcaster && connectionStatus === 'SUBSCRIBED') {
         console.log("Manual Connect: Resetting PC and sending READY...");
-
-        // NUCLEAR RESET: Ensure we have NO existing connection blocking us
         if (peerRef.current) {
             peerRef.current.close();
             peerRef.current = null;
         }
-
+        candidateQueue.current = [];
         sendSignal('ready', {});
     }
   }, [isBroadcaster, connectionStatus, sendSignal]);
