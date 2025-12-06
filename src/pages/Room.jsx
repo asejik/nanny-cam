@@ -20,12 +20,13 @@ export default function Room({ session }) {
   // 1. Signaling Hook
   const { connectionStatus, sendSignal } = useSignaling(roomId, userId);
 
-  // 2. WebRTC Hook
+ // 2. WebRTC Hook
   const { localStream, remoteStream, startStream, stopStream, processSignal, toggleMic } = useWebRTC(
     roomId,
     userId,
     role === 'broadcaster',
-    sendSignal
+    sendSignal,
+    connectionStatus // <--- NEW: Pass the status here
   );
 
   const localVideoRef = useRef(null);
